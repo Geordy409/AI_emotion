@@ -1,28 +1,25 @@
 import streamlit as st
-page_title="Chatbot DSM-5",
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, AIMessage
 from dotenv import load_dotenv
 import os
 
+# Charger les variables d'environnement depuis .env
+load_dotenv()
+
 # Configuration de la page
 st.set_page_config(
+    page_title="Chatbot DSM-5",
     page_icon="🧠",
     layout="wide"
 )
-
-# Charger la clé depuis le fichier .env
-load_dotenv()
-
-openai_key ="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"
 
 # Initialiser l'historique de conversation dans session_state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "chat_model" not in st.session_state:
-    st.session_state.chat_model = None
+if "processing" not in st.session_state:
+    st.session_state.processing = False 
 
 # Titre
 st.title("💬 Chatbot Psychiatrique DSM-5")
@@ -32,7 +29,9 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Configuration")
     
-    # Vérifier si la clé API est configurée
+    # Récupérer la clé API
+    openai_key = os.getenv("OPENAI_API_KEY")
+    
     if not openai_key:
         st.error("⚠️ Clé API OpenAI non configurée")
         openai_key = st.text_input(
@@ -42,6 +41,8 @@ with st.sidebar:
         )
     else:
         st.success("✅ Clé API configurée")
+        # Afficher les premiers caractères pour debug
+        st.caption(f"Clé: {openai_key[:10]}...")
     
     # Paramètres du modèle
     temperature = st.slider(
@@ -55,8 +56,9 @@ with st.sidebar:
     
     model = st.selectbox(
         "🤖 Modèle",
-        ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"],
-        index=0
+        ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+        index=0,
+        help="gpt-4o-mini est recommandé (rapide et économique)"
     )
     
     st.markdown("---")
@@ -64,10 +66,15 @@ with st.sidebar:
     # Bouton pour effacer l'historique
     if st.button("🗑️ Effacer l'historique", use_container_width=True):
         st.session_state.messages = []
+        st.session_state.processing = False
         st.rerun()
     
     # Compteur de messages
     st.info(f"📊 Messages: {len(st.session_state.messages)}")
+    
+    # Debug info
+    if st.session_state.processing:
+        st.warning("⏳ En cours de traitement...")
     
     st.markdown("---")
     st.markdown("### 💡 Exemples")
@@ -84,42 +91,36 @@ with st.sidebar:
 # Zone de chat principale
 if openai_key:
     try:
-        # Initialiser le modèle
-        if st.session_state.chat_model is None or st.session_state.get("last_model") != model:
-            st.session_state.chat_model = ChatOpenAI(
-                model=model,
-                temperature=temperature,
-                api_key=openai_key
-            )
-            st.session_state.last_model = model
-        
         # Afficher l'historique des messages
-        chat_container = st.container()
+        for i, message in enumerate(st.session_state.messages):
+            if message["role"] == "user":
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(message["content"])
+            else:
+                with st.chat_message("assistant", avatar="🧠"):
+                    st.markdown(message["content"])
         
-        with chat_container:
-            for message in st.session_state.messages:
-                if message["role"] == "user":
-                    with st.chat_message("user", avatar="👤"):
-                        st.markdown(message["content"])
-                else:
-                    with st.chat_message("assistant", avatar="🧠"):
-                        st.markdown(message["content"])
+        # Zone de saisie du message - TOUJOURS affichée
+        prompt = st.chat_input(
+            "💬 Posez votre question sur le DSM-5...",
+            disabled=st.session_state.processing
+        )
         
-        # Zone de saisie du message
-        user_input = st.chat_input("💬 Posez votre question sur le DSM-5...")
-        
-        if user_input:
-            # Ajouter le message de l'utilisateur à l'historique
+        # Traiter le message utilisateur
+        if prompt and not st.session_state.processing:
+            st.session_state.processing = True
+            
+            # Ajouter le message de l'utilisateur
             st.session_state.messages.append({
                 "role": "user",
-                "content": user_input
+                "content": prompt
             })
             
-            # Afficher le message de l'utilisateur
+            # Afficher le message de l'utilisateur immédiatement
             with st.chat_message("user", avatar="👤"):
-                st.markdown(user_input)
+                st.markdown(prompt)
             
-            # Préparer le contexte de conversation
+            # Préparer les messages pour l'IA
             messages_for_ai = [
                 ("system", """Tu es un expert en psychiatrie spécialisé dans le DSM-5 (Manuel diagnostique et statistique des troubles mentaux, 5e édition). 
 
@@ -132,61 +133,89 @@ Tes missions:
 Réponds de manière conversationnelle et professionnelle.""")
             ]
             
-            # Ajouter l'historique de conversation
+            # Ajouter l'historique complet
             for msg in st.session_state.messages:
                 if msg["role"] == "user":
                     messages_for_ai.append(("human", msg["content"]))
                 else:
                     messages_for_ai.append(("ai", msg["content"]))
             
-            # Créer le prompt et la chaîne
-            prompt = ChatPromptTemplate.from_messages(messages_for_ai)
-            chain = prompt | st.session_state.chat_model
-            
-            # Générer la réponse avec animation
+            # Générer la réponse
             with st.chat_message("assistant", avatar="🧠"):
-                with st.spinner("🔍 Analyse en cours..."):
-                    try:
-                        response = chain.invoke({})
-                        assistant_response = response.content
-                        
-                        # Afficher la réponse
-                        st.markdown(assistant_response)
-                        
-                        # Ajouter la réponse à l'historique
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": assistant_response
-                        })
-                        
-                    except Exception as e:
-                        st.error(f"❌ Erreur: {str(e)}")
-            
-            # Forcer le rafraîchissement pour afficher le nouveau message
-            st.rerun()
+                message_placeholder = st.empty()
+                
+                try:
+                    # Initialiser le modèle
+                    chat_model = ChatOpenAI(
+                        model=model,
+                        temperature=temperature,
+                        api_key=openai_key,
+                        streaming=False
+                    )
+                    
+                    # Créer la chaîne
+                    prompt_template = ChatPromptTemplate.from_messages(messages_for_ai)
+                    chain = prompt_template | chat_model
+                    
+                    # Message de chargement
+                    message_placeholder.markdown("🔍 _Réflexion en cours..._")
+                    
+                    # Invoquer le modèle
+                    response = chain.invoke({})
+                    assistant_response = response.content
+                    
+                    # Afficher la réponse
+                    message_placeholder.markdown(assistant_response)
+                    
+                    # Sauvegarder dans l'historique
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": assistant_response
+                    })
+                    
+                    st.session_state.processing = False
+                    
+                except Exception as e:
+                    error_msg = f"❌ **Erreur:** {str(e)}"
+                    message_placeholder.markdown(error_msg)
+                    st.error(f"Détails de l'erreur: {type(e).__name__}")
+                    
+                    # Sauvegarder l'erreur dans l'historique
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": error_msg
+                    })
+                    
+                    st.session_state.processing = False
     
     except Exception as e:
         st.error(f"❌ Erreur d'initialisation: {str(e)}")
+        st.error(f"Type d'erreur: {type(e).__name__}")
         st.info("💡 Vérifiez votre clé API et votre connexion internet")
 
 else:
     # Message si pas de clé API
-    st.warning("⚠️ Configurez votre clé API OpenAI dans la barre latérale pour commencer")
+    st.warning("⚠️ Configurez votre clé API OpenAI dans la sidebar")
     
     st.markdown("### 🚀 Pour commencer:")
     st.markdown("""
-    1. Créez un fichier `.env` à la racine du projet
-    2. Ajoutez: `OPENAI_API_KEY=votre-clé-ici`
-    3. Ou entrez votre clé dans la barre latérale
-    4. Relancez l'application
+    1. **Option 1 - Fichier .env (recommandé)**
+       - Créez un fichier `.env` à la racine du projet
+       - Ajoutez: `OPENAI_API_KEY=sk-votre-clé-ici`
+       - Relancez: `streamlit run app.py`
+    
+    2. **Option 2 - Saisie manuelle**
+       - Entrez votre clé dans la sidebar →
+       - Commencez à discuter !
     """)
+    
+    st.info("🔑 Obtenez une clé API sur: https://platform.openai.com/api-keys")
 
-# Footerl
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: gray; font-size: 12px;'>
     🧠 Chatbot DSM-5 | Développé avec LangChain & Streamlit | 
-    Données basées surfV  
-      r le DSM-5 (2013)
+    Données basées sur le DSM-5 (2013)
 </div>
 """, unsafe_allow_html=True)
