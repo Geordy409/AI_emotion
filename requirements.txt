@@ -1,5 +1,6 @@
-flask
+streamlit
 requests
+pandas
+numpy
+flask
 gunicorn
-langchain
-openai
